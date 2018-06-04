@@ -6,11 +6,96 @@ import (
 	"reflect"
 	"strings"
 	"strconv"
+	"io/ioutil"
+	"os"
 )
 
 
 
-func Umarshal(data []byte, result interface{}) (err error) {
+func MarshalFile(fileName string,result interface{})(err error){
+	f,err := os.OpenFile(fileName,os.O_CREATE |os.O_TRUNC |os.O_WRONLY,0766)
+	if err != nil{
+		err  = fmt.Errorf("cannot open the file,err:",err)
+		return
+	}
+	data,err := Marshal(result)
+	if err != nil{
+		return
+	}
+	
+	_,err = f.Write(data)
+	if err != nil{
+		err = fmt.Errorf("Write ini failed,err:",err)
+		return 
+	}
+	return nil
+}
+
+func Marshal(result interface{})(data []byte,err error){
+	var dataString = ""
+	v := reflect.ValueOf(result)
+	t := v.Type()
+	if t.Kind() != reflect.Struct {
+		err = fmt.Errorf("The container must be struct")
+		return
+	}
+	for i:=0;i<v.NumField();i++ {
+
+		if v.Field(i).Type().Kind() == reflect.Struct{
+			writeSection(&dataString,v.Field(i),t.Field(i))
+
+		}else{
+			writeItem(&dataString,v.Field(i),t.Field(i))
+		}
+
+	}
+	return []byte(dataString),nil
+
+}
+
+func writeSection(dataString *string, vfield reflect.Value, tfield reflect.StructField){
+	sectionName := fmt.Sprintf("%v",tfield.Name)
+	*dataString = *dataString + "[" + sectionName + "]" +"\n"
+	for i:= 0;i<vfield.NumField();i++  {
+		writeItem(dataString,vfield.Field(i),tfield.Type.Field(i))
+	}
+}
+
+func writeItem(dataString *string,vfield reflect.Value, tfield reflect.StructField){
+	tagStr := tfield.Tag.Get("ini")
+	if tagStr == ""{
+		tagStr = tfield.Name
+	}
+	val := fmt.Sprintf("%v",vfield)
+	*dataString = *dataString + tagStr + "=" + val + "\n"
+}
+
+func UnMarshalFile(fileName string,result interface{})(err error){
+	t := reflect.ValueOf(result).Type()
+	if t.Kind() != reflect.Ptr {
+		err = fmt.Errorf("The container must be address")
+		return
+	}
+	if t.Elem().Kind() != reflect.Struct {
+		err = fmt.Errorf("The container must be struct")
+		return
+	}
+
+	data,err := ioutil.ReadFile(fileName)
+	if err != nil{
+		fmt.Errorf("Read data from file failed,err:%v",err)
+		return
+	}
+
+	err = Unmarshal(data,result)
+	if err != nil{
+		fmt.Errorf("UnMarshalFile failed,err:%v",err)
+		return
+	}
+	return
+}
+
+func Unmarshal(data []byte, result interface{}) (err error) {
 	lineArr := strings.Split(string(data), "\n")
 	val := reflect.ValueOf(result)
 	t := val.Type()
@@ -60,14 +145,17 @@ func parseLines(lines []string,result interface{}) (err error) {
 		// [ 开头的,通过parseSection来解析，如果错误会返回报错
 		if lineStr[0] == '[' {
 			err,lastSectionName = parseSection(lineStr)
-			fmt.Println(lastSectionName)
 			if err != nil{
 				err = fmt.Errorf("%v,line%v:",err,index+1)
 				return
 			}
 		} else {   //处理item
 			if lastSectionName == "" {
-				parseItem(lineStr,structElem)
+				err = parseItem(lineStr,structElem)
+				if err != nil{
+					err = fmt.Errorf("%v,lineNo:%v",err,index+1)
+					return
+				}
 			}else {     //section下的item处理
 
 				var structStructElem reflect.Value
@@ -91,6 +179,7 @@ func parseLines(lines []string,result interface{}) (err error) {
 				err = parseItem(lineStr,structStructElem)
 				if err != nil{
 					err = fmt.Errorf("%v,lineNo:%v",err,index+1)
+					return
 				}
 			}
 			
@@ -99,8 +188,6 @@ func parseLines(lines []string,result interface{}) (err error) {
 	}
 	return nil
 }
-
-
 
 func parseSection(lineStr string) (err error, sectionName string) {
 	if strings.IndexByte(lineStr, ']') == -1 || strings.IndexByte(lineStr, ']') != len(lineStr)-1 { //section必须包含[]，并且]只能在末尾
@@ -117,9 +204,6 @@ func parseSection(lineStr string) (err error, sectionName string) {
 
 
 }
-
-
-
 
 func parseItem(lineStr string,structElem reflect.Value) (err error) {
 
@@ -154,6 +238,7 @@ func parseItem(lineStr string,structElem reflect.Value) (err error) {
 		}
 	}
 	if ok == false {
+
 		err = errors.New("No mathed item")
 		return
 	}
